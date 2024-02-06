@@ -8,7 +8,7 @@ from relaxed_ik_ros1.msg import EEVelGoals
 import transformations as T
 from robot import Robot
 from sensor_msgs.msg import Joy
-import franka_gripper.msg
+# import franka_gripper.msg
 from std_msgs.msg import Int8MultiArray, Float64MultiArray,  Float32MultiArray
 from franka_msgs.msg import FrankaState
 from scipy.spatial.transform import Rotation as R
@@ -24,6 +24,10 @@ from visualization_msgs.msg import MarkerArray
 from matplotlib import cm
 from geometry_msgs.msg import Vector3, Point
 from std_msgs.msg import ColorRGBA
+import pandas as pd 
+import csv
+import time
+import os
 
 path_to_src = rospkg.RosPack().get_path('relaxed_ik_ros1') + '/relaxed_ik_core'
 class GraspLoop:
@@ -71,7 +75,7 @@ class GraspLoop:
         if self.__start_buck_2:
             self.cur_list_idx = 10
 
-        self.__hiro_g = hiro_grasp.hiro_grasp()
+        self.hiro_g = hiro_grasp.hiro_grasp()
         self.__pose_order_list = self.set_pose_order_list(flag)
         self.__cur_idx = 0 
         self.already_collided = False
@@ -133,10 +137,10 @@ class GraspLoop:
         self.grasp_dict["x_goal"] = self.grasp_dict[self.__pose_order_list[self.__cur_idx]]
 
     def set_grasp_width(self, width):
-        self.__hiro_g.set_grasp_width(width)
+        self.hiro_g.set_grasp_width(width)
     
     def grasp(self):
-        self.__hiro_g.grasp()
+        self.hiro_g.grasp()
 
     def get_error_xyz(self, x_ee):
         return self.xyz_diff(x_ee, self.grasp_dict["x_goal"])
@@ -157,7 +161,7 @@ class GraspLoop:
     def check_next_state(self, error):
         error_bound = 0.015
         error_sum = sum([abs(elem) for elem in error])
-        ret = False    
+        ret = False
         
         print("error sum: ", error_sum)
         if error_sum < error_bound:
@@ -165,12 +169,12 @@ class GraspLoop:
             if not self.__pose_order_list:
                 self.__inc_pose_list()
                 if self.grasp_list[self.cur_list_idx][0] == self.__grasp_flag:
-                    self.__hiro_g.set_grasp_width(0.055)
-                    self.__hiro_g.grasp()
+                    self.hiro_g.set_grasp_width(0.055)
+                    self.hiro_g.grasp()
                     rospy.sleep(1.0)
                     self.__inc_pose_list()
                 elif self.grasp_list[self.cur_list_idx][0] == self.__release_flag:
-                    self.__hiro_g.open()
+                    self.hiro_g.open()
                     rospy.sleep(1.0)
                     self.__inc_pose_list()
                 elif self.grasp_list[self.cur_list_idx][0] == self.__end_flag:
@@ -183,15 +187,15 @@ class GraspLoop:
                     self.__inc_pose_list()
                 return ret
             if self.__pose_order_list[self.__cur_idx] == "x_d":
-                self.__hiro_g.open()
+                self.hiro_g.open()
                 rospy.sleep(1.0)
             ret = self.inc_state()
         if not self.__pose_order_list:
             return ret
         elif self.__pose_order_list[self.__cur_idx] == "grasp":
             ret = self.inc_state()
-            self.__hiro_g.set_grasp_width(0.055)
-            self.__hiro_g.grasp()
+            self.hiro_g.set_grasp_width(0.055)
+            self.hiro_g.grasp()
             rospy.sleep(1.0)
         return ret
     
@@ -216,8 +220,13 @@ class GraspLoop:
 
 class XboxInput:
     def __init__(self, flag):
-        self.client = actionlib.SimpleActionClient('franka_gripper/move', franka_gripper.msg.MoveAction)
+        # self.client = actionlib.SimpleActionClient('franka_gripper/move', franka_gripper.msg.MoveAction)
         self.flag = flag
+        self.save = False
+        self.data_array = np.array([[]])
+        self.start_time = 0.0
+        self.end_time = 0.0
+        self.total_time = 0.0
 
         default_setting_file_path = path_to_src + '/configs/settings.yaml'
 
@@ -233,7 +242,7 @@ class XboxInput:
 
         self.ee_vel_goals_pub = rospy.Publisher('relaxed_ik/ee_vel_goals', EEVelGoals, queue_size=1)
         self.hiro_ee_vel_goals_pub = rospy.Publisher('relaxed_ik/hiro_ee_vel_goals', Float64MultiArray, queue_size=1)
-        self.pos_stride = 0.005
+        self.pos_stride = 0.002
         self.rot_stride = 0.0125
         self.p_t = 0.01
         self.p_r = 0.001
@@ -254,7 +263,7 @@ class XboxInput:
         self.grasp_midpoint = [0,0,0,0,0,0,0]
 
         self.grip_cur = 0.08
-        self.grip_inc = 0.01
+        self.grip_inc = 0.04
         self.grip_max = 0.08
         self.grip_min = 0.01
         self.prev_pres = 0
@@ -279,6 +288,7 @@ class XboxInput:
         self.msg_cone_start = 0.0
         self.nearest_cone_points = [None, None]
         self.x_c = [0,0,0,0,0,0,0]
+        self.last_grasp_time = time.time()
         # used when creating a trajectory for playback with xbox controller
         # list function will automatically pay robot positions from this file
         self.save_file = "/home/caleb/robochem_steps/test.txt"
@@ -290,14 +300,14 @@ class XboxInput:
         rospy.Subscriber("/franka_state_controller/franka_states", FrankaState, self.fr_state_cb)
         rospy.Subscriber("/estimated_approach_frame", Float32MultiArray, self.l_shaped_callback)
         rospy.sleep(1.0)
-        rospy.Timer(rospy.Duration(0.033), self.timer_callback)
+        rospy.Timer(rospy.Duration(0.005), self.timer_callback)
 
     def joy_cb(self, data):
         self.joy_data = data
         if abs(self.joy_data.axes[1]) > 0.1:
-            self.linear[0] -= self.pos_stride * self.joy_data.axes[1]
+            self.linear[0] += self.pos_stride * self.joy_data.axes[1]
         if abs(self.joy_data.axes[0]) > 0.1:
-            self.linear[1] -= self.pos_stride * self.joy_data.axes[0]
+            self.linear[1] += self.pos_stride * self.joy_data.axes[0]
         if abs(self.joy_data.axes[4]) > 0.1:
             self.linear[2] += self.pos_stride * self.joy_data.axes[4]
         if abs(self.joy_data.axes[6]) > 0.1:
@@ -310,46 +320,54 @@ class XboxInput:
             self.angular[2] -= self.rot_stride
         # Start is button 7
         start = data.buttons[7]
-        if start and not self.prev_pres:
-            file = open(self.save_file, 'a+')
-            file.write(str(self.franka_pose)+"\n")
-            print("start pressed ---- SAVE ROBOT POSE to file")
-        self.prev_pres = data.buttons[7]
+        back = data.buttons[6]
+        if start:
+            self.save = True
+            self.start_time = time.perf_counter()
+        if back:
+            f = open("/home/caleb/catkin_ws/src/relaxed_ik_ros1/scripts/xyz_data.csv", "w")
+            f.truncate()
+            f.close()    
+            self.save = False
+            self.end_time = time.perf_counter()
+            self.total_time = self.end_time - self.start_time
+            self.data_array = np.append(self.data_array, self.total_time)
+            print('\n\n SAVING TO CSV \n\n', f'\n\n {self.total_time:0.4f} \n\n')
+            np.savetxt("/home/caleb/catkin_ws/src/relaxed_ik_ros1/scripts/xyz_data.csv", self.data_array, delimiter=",")
+            exit()
 
         a = data.buttons[0]
-        b = data.buttons[1] 
+        b = data.buttons[1]
+
         if a:
-           self.grip_cur += self.grip_inc
+            self.grip_cur += self.grip_inc
         elif b:
             self.grip_cur -= self.grip_inc
         if a or b:
-            # TODO add move gripper call
-            # self.move_gripper()
-            pass
+            if (time.time() - self.last_grasp_time) >= 2.0:
+                self.move_gripper()
+                self.last_grasp_time = time.time()
         if self.grip_cur > self.grip_max: self.grip_cur = self.grip_max
         if self.grip_cur < self.grip_min: self.grip_cur = self.grip_min
 
     def move_gripper(self):
-        self.hiro_g.set_grasp_width(self.grip_cur)
-        self.hiro_g.grasp()
-
+        print('In move gripper grip_cur: ', self.grip_cur)
+        self.grasp_loop.hiro_g.set_grasp_width(self.grip_cur)
+        self.grasp_loop.hiro_g.grasp()
 
     def on_release(self):
         self.linear = [0,0,0]
         self.angular = [0,0,0]
 
     def _xyz_diff(self, start_pose, end_pose):
-
         difference = [0.0, 0.0, 0.0]
         difference[0] = end_pose[0] - start_pose[0]
         difference[1] = end_pose[1] - start_pose[1]
         difference[2] = end_pose[2] - start_pose[2]
-
         return difference
 
     def calc_error(self):
         twist = Twist()
-        
         twist.linear.x = self.error_state[0] * self.p_t
         twist.linear.y = self.error_state[1] * self.p_t
         twist.linear.z = self.error_state[2] * self.p_t
@@ -367,7 +385,6 @@ class XboxInput:
         ret.append(grasp_quat[1])
         ret.append(grasp_quat[2])
         return ret
-        
     
     def angle_error(self, gr, fr):
         gr_e = gr.as_euler("xyz", degrees=False)
@@ -385,7 +402,6 @@ class XboxInput:
 
         test_r = R.from_matrix(np.reshape(our_ang, newshape=[3,3]))
         output = test_r.as_euler("xyz", degrees=False)
-
         return output
 
     def calc_rotation_sign(self, fr_euler, gr_euler):
@@ -562,7 +578,6 @@ class XboxInput:
 
         return new_height
 
-
     def check_collide(self, ee, ee_trans, ee_quat, cone, cone_trans, cone_quat):
         tf_ee = fcl.Transform(ee_quat, ee_trans)
         tf_cone = fcl.Transform(cone_quat, cone_trans)
@@ -601,9 +616,7 @@ class XboxInput:
             hiro_msg = Float64MultiArray()
             self.error_state = self.grasp_loop.get_curr_error(self.fr_position)
             
-            
             hiro_msg.data = self.get_hiro_error_msg(self.grasp_loop.grasp_dict["x_goal"][3:])
-
             # print(len(hiro_msg.data))
             hiro_msg.data[3] = self.grasp_loop.grasp_dict["x_goal"][6]
             hiro_msg.data[4] = self.grasp_loop.grasp_dict["x_goal"][3]
@@ -766,6 +779,25 @@ class XboxInput:
             self.on_release()
             if self.grasp_loop.check_next_state(self.error_state):
                 self.wait_for_new_grasp()
+    def clamp_linear_velocity(self):
+        z_max = 0.7
+        z_min = 0.04
+        y_max = 0.7
+        y_min = -0.7
+        x_max = 0.6
+        x_min = 0.0
+
+        # Set X bounds
+        if self.fr_position[0] > x_max and self.linear[0] > 0: self.linear[0] = 0
+        elif self.fr_position[0] < x_min and self.linear[0] < 0: self.linear[0] = 0
+
+        # Set Y bounds
+        if self.fr_position[1] > y_max and self.linear[1] > 0: self.linear[1] = 0
+        elif self.fr_position[1] < y_min and self.linear[1] < 0: self.linear[1] = 0
+
+        # Set Z bounds
+        if self.fr_position[2] > z_max and self.linear[2] > 0: self.linear[2] = 0
+        elif self.fr_position[2] < z_min and self.linear[2] < 0: self.linear[2] = 0
 
     def xbox_input(self):
         msg = EEVelGoals()
@@ -782,7 +814,6 @@ class XboxInput:
         fr_quat = fr_r.as_quat()
         fr_e = fr_r.as_euler("xyz", degrees=False)
         fr_r = R.from_euler("xyz", fr_e, degrees=False)
-        quat_2 = fr_r.as_quat()
 
         fcl_ee = self.make_ee_sphere()
         fcl_cone = self.make_fcl_cone()        
@@ -793,11 +824,15 @@ class XboxInput:
         self.franka_pose.extend(self.fr_position)
         self.franka_pose.extend(fr_quat)
 
+        if self.save:
+            self.data_array = np.append(self.data_array, [self.fr_position])
+
         self.pub_cone_as_cylinders(self.og_x_a, self.grasp_pose, self.og_quat)
         self.in_collision = self.check_collide(fcl_ee, self.fr_position, [fr_quat[3], fr_quat[0], fr_quat[1], fr_quat[2]]
                         ,fcl_cone, self.grasp_midpoint[:3], [self.og_quat[3], self.og_quat[0], self.og_quat[1], self.og_quat[2]])
     
         self.pub_closest_point(self.nearest_cone_points[1])
+        self.clamp_linear_velocity()
         for i in range(self.robot.num_chain):
             twist = Twist()
             tolerance = Twist()

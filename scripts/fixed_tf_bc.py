@@ -40,8 +40,9 @@ class grasp_vis:
         trans1, rot1 = None, None
         self.mutex.acquire()
         self.time = rospy.Time.now()
-        self.br.sendTransform((0.815599, 0.0531572, 0.761237),
-                         (0.677933, 0.668852, -0.220797, -0.210456),                        
+        # x y z, z is up down, y side to side, x is forward and back 
+        self.br.sendTransform((0.830751, -0.00350194, 0.691572),
+                         (0.690083, 0.667287, -0.203756, -0.192345),                        
                          self.time,
                          "kinect2_rgb_optical_frame",
                          "fr3_link0")
