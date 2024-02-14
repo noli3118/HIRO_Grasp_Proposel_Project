@@ -8,7 +8,6 @@ from relaxed_ik_ros1.msg import EEVelGoals
 import transformations as T
 from robot import Robot
 from sensor_msgs.msg import Joy
-# import franka_gripper.msg
 from std_msgs.msg import Int8MultiArray, Float64MultiArray,  Float32MultiArray
 from franka_msgs.msg import FrankaState
 from scipy.spatial.transform import Rotation as R
@@ -61,6 +60,7 @@ class GraspLoop:
         # 1.[0] -> release
         # 1.[1] -> grasp 
         # 1.[2, #] -> wait with time in sec
+        # [3] -> end?
         self.grasp_list = result_array
         # changed
         # grasp location
@@ -165,11 +165,10 @@ class GraspLoop:
         
         print("error sum: ", error_sum)
         if error_sum < error_bound:
-            # Dialysis pick and place!!!! Diane!!
             if not self.__pose_order_list:
                 self.__inc_pose_list()
                 if self.grasp_list[self.cur_list_idx][0] == self.__grasp_flag:
-                    self.hiro_g.set_grasp_width(0.055)
+                    self.hiro_g.set_grasp_width(0.03)
                     self.hiro_g.grasp()
                     rospy.sleep(1.0)
                     self.__inc_pose_list()
@@ -194,7 +193,6 @@ class GraspLoop:
             return ret
         elif self.__pose_order_list[self.__cur_idx] == "grasp":
             ret = self.inc_state()
-            self.hiro_g.set_grasp_width(0.055)
             self.hiro_g.grasp()
             rospy.sleep(1.0)
         return ret
@@ -220,7 +218,6 @@ class GraspLoop:
 
 class XboxInput:
     def __init__(self, flag):
-        # self.client = actionlib.SimpleActionClient('franka_gripper/move', franka_gripper.msg.MoveAction)
         self.flag = flag
         self.save = False
         self.data_array = np.array([[]])
@@ -244,7 +241,7 @@ class XboxInput:
         self.hiro_ee_vel_goals_pub = rospy.Publisher('relaxed_ik/hiro_ee_vel_goals', Float64MultiArray, queue_size=1)
         self.pos_stride = 0.002
         self.rot_stride = 0.0125
-        self.p_t = 0.01
+        self.p_t = 0.0025
         self.p_r = 0.001
         self.rot_error = [0.0, 0.0, 0.0]
 
@@ -289,8 +286,6 @@ class XboxInput:
         self.nearest_cone_points = [None, None]
         self.x_c = [0,0,0,0,0,0,0]
         self.last_grasp_time = time.time()
-        # used when creating a trajectory for playback with xbox controller
-        # list function will automatically pay robot positions from this file
         self.save_file = "/home/caleb/robochem_steps/test.txt"
         self.cone_pub = rospy.Publisher('cone_viz', MarkerArray, queue_size=1)
 
@@ -318,9 +313,15 @@ class XboxInput:
             self.angular[2] += self.rot_stride
         if abs(self.joy_data.buttons[5]) > 0.1:
             self.angular[2] -= self.rot_stride
+
+        y_press = data.buttons[3]
+        if y_press:
+            print("Franka Pose: ", self.franka_pose)
+
         # Start is button 7
         start = data.buttons[7]
         back = data.buttons[6]
+
         if start:
             self.save = True
             self.start_time = time.perf_counter()
