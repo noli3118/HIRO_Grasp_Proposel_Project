@@ -31,7 +31,6 @@ import os
 path_to_src = rospkg.RosPack().get_path('relaxed_ik_ros1') + '/relaxed_ik_core'
 class GraspLoop:
     def __init__(self, flag, grasp_pose, grasp_apprach, 
-                 # TODO: fix the home and drop quat values, the robot gets twisted
                  home_pose=[0.30871, 0.000905, 0.48742, 0.9994651, -0.00187451, 0.0307489, -0.01097748], 
                  drop_pose = [0.23127, -0.5581, 0.31198, 0.9994651, -0.00187451, 0.0307489, -0.01097748], 
                  cone_radius=0.25, cone_height=0.25,):
@@ -48,8 +47,6 @@ class GraspLoop:
         }
 
         self.home_pose = home_pose
-
-        # Load grasp locations
         self.load_file = "/home/caleb/robochem_steps/test.txt"
         with open(self.load_file, 'r') as file:
             lines = file.readlines()
@@ -57,20 +54,13 @@ class GraspLoop:
             result_array = np.array(float_arrays)
 
         print(result_array)
-        # 1.[0] -> release
-        # 1.[1] -> grasp 
-        # 1.[2, #] -> wait with time in sec
-        # [3] -> end?
         self.grasp_list = result_array
-        # changed
-        # grasp location
         self.__release_flag = [0]
         self.__grasp_flag = [1]
         self.__wait_flag = [2]
         self.__end_flag = [3]
         
         self.cur_list_idx = 0
-
         self.__start_buck_2 = False
         if self.__start_buck_2:
             self.cur_list_idx = 10
